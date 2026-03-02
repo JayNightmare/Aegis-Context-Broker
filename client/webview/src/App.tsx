@@ -29,17 +29,32 @@ function App() {
         setStatus("Connecting to Vault...");
         if (vscode) {
             vscode.postMessage({
-                command: "alert",
-                text: "Initiating connection to Aegis Backend via VSCode.",
+                command: "initiate_github_oauth",
+                platform: "github",
             });
         }
     };
 
-    // Request initial state on mount
+    // Request initial state on mount and listen for IPC messages
     useEffect(() => {
         if (vscode) {
             vscode.postMessage({ command: "request_initial_state" });
         }
+
+        const handleMessage = (event: MessageEvent) => {
+            const message = event.data;
+            switch (message.command) {
+                case "github_connected":
+                    setStatus("Connected");
+                    break;
+                case "github_connection_failed":
+                    setStatus(`Failed: ${message.error || "Unknown error"}`);
+                    break;
+            }
+        };
+
+        window.addEventListener("message", handleMessage);
+        return () => window.removeEventListener("message", handleMessage);
     }, []);
 
     return (

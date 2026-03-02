@@ -15,6 +15,7 @@
  * ============================================================================
  */
 
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { integrationRoutes } from "./routes/integration";

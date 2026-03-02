@@ -59,6 +59,59 @@ export function activate(context: vscode.ExtensionContext) {
                     case "alert":
                         vscode.window.showErrorMessage(message.text);
                         return;
+                    case "initiate_github_oauth":
+                        // Launch the user's default browser to authenticate
+                        const clientId = "Ov23liao1jC8VqM1Yk1C"; // Hardcoding for local dev since extensions can't read .env easily
+                        const redirectUri =
+                            "http://localhost:8080/api/integrations/github/callback";
+                        const scope = "repo read:user";
+                        const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(
+                            redirectUri,
+                        )}&scope=${encodeURIComponent(scope)}`;
+
+                        vscode.env.openExternal(vscode.Uri.parse(authUrl));
+
+                        // Start polling the backend to see when the OAuth flow finishes
+                        let attempts = 0;
+                        const pollInterval = setInterval(() => {
+                            attempts++;
+                            if (attempts > 30) {
+                                // Timeout after 1.5 minutes (30 * 3s)
+                                clearInterval(pollInterval);
+                                panel.webview.postMessage({
+                                    command: "github_connection_failed",
+                                    error: "OAuth flow timed out.",
+                                });
+                                return;
+                            }
+
+                            fetch(
+                                "http://localhost:8080/api/integrations/github/status",
+                                {
+                                    headers: {
+                                        Authorization:
+                                            "Bearer mock-valid-token",
+                                    },
+                                },
+                            )
+                                .then((res) => res.json())
+                                .then((data) => {
+                                    if (data.connected) {
+                                        clearInterval(pollInterval);
+                                        panel.webview.postMessage({
+                                            command: "github_connected",
+                                        });
+                                    }
+                                })
+                                .catch((e) => {
+                                    console.error(
+                                        "Error polling github status:",
+                                        e,
+                                    );
+                                });
+                        }, 3000); // Check every 3 seconds
+
+                        return;
                     case "request_initial_state":
                         // If webview asks for initial state, trigger evaluation forcefully
                         (contextExtractor as any)["triggerEvaluation"]();
@@ -67,7 +120,7 @@ export function activate(context: vscode.ExtensionContext) {
                         // Fetch predictions from the backend (auth token mocked for now)
                         fetch("http://localhost:8080/api/predict", {
                             headers: {
-                                Authorization: "Bearer test-token",
+                                Authorization: "Bearer mock-valid-token",
                             },
                         })
                             .then((res) => {
@@ -116,7 +169,7 @@ export function activate(context: vscode.ExtensionContext) {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json",
-                        Authorization: "Bearer test-token",
+                        Authorization: "Bearer mock-valid-token",
                     },
                     body: JSON.stringify(snapshot),
                 }).catch((e) => console.error("[State Push Error]", e));
