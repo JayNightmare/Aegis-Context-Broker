@@ -22,6 +22,7 @@
     - Implement state ingestion API in the Node.js backend.
     - Integrate Firestore for state persistence.
     - Implement local caching layer to prevent excessive network calls.
+    - **[RESOLVED]** Fix conflicting ESLint 9 / TypeScript types (@types/jest vs @types/mocha) in client package.
 
 ## Phase 3: AI Augmentation (Completed)
 

@@ -27,7 +27,7 @@ export function activate(context: vscode.ExtensionContext) {
     const contextExtractor = new ContextExtractor(context);
     const localCache = new LocalStateCache(context.secrets);
 
-    let disposable = vscode.commands.registerCommand("aegis.openVault", () => {
+    const disposable = vscode.commands.registerCommand("aegis.openVault", () => {
         // Create and show a new webview
         const panel = vscode.window.createWebviewPanel(
             "aegisVault",
