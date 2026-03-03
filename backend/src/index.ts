@@ -30,7 +30,7 @@ app.use(express.json());
 
 // Main health check for Cloud Run
 app.get("/health", (req, res) => {
-    res.status(200).send("Aegis Backend is healthy.");
+	res.status(200).send("Aegis Backend is healthy.");
 });
 
 // Route registrations
@@ -39,5 +39,5 @@ app.use("/api/state", stateRoutes);
 app.use("/api/predict", predictRoutes);
 
 app.listen(PORT, () => {
-    console.log(`Aegis Context Broker Backend listening on port ${PORT}`);
+	console.log(`Aegis Context Broker Backend listening on port ${PORT}`);
 });
