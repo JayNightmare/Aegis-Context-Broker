@@ -2,7 +2,31 @@
 
 All notable changes to the Aegis Context Broker project will be documented in this file.
 
+## [0.6.0] - Phase 6: Proactive Pre-Fetch Engine
+
+### Added
+- **`predictionEngine.ts`**: Auto-triggers predictions on context change with 5s debounce and context hash dedup. Caches results and pushes to Webview on panel open.
+- **`githubDetails.ts`**: Pre-fetches PR/Issue body, labels, changed files count, and comment count from GitHub API.
+
+### Changed
+- **`extension.ts`**: Refactored to delegate prediction logic to `PredictionEngine`. Predictions cache even before panel opens.
+- **`insightResolver.ts`**: Hydrates `GitHubResult` with body/labels/comments after search.
+- **`AIPredictions.tsx`**: Auto-loads on mount, expandable preview cards, "↻ Refresh" button, label chips, metadata row, "Last updated" timestamp.
+- **`githubSearch.ts`**: `GitHubResult` extended with `body`, `labels`, `changedFilesCount`, `commentCount`.
+
+## [0.5.0] - Phase 5: Core Prediction Engine
+
+
+### Changed
+
+- **`contextExtractor.ts`**: Now extracts `openSymbols` (via document symbol provider), `recentFiles` (last 5), `diagnostics` (errors/warnings), and `repoHint` (parsed from git remote URL) — giving the AI real IDE signals.
+- **`aiPrompt.ts`**: Rewrote prompt to inject all new context fields and added `searchQuery` to the AI schema for optimised GitHub search strings.
+- **`githubSearch.ts`**: Scopes searches to the user's own repo via `repo:` qualifier, handles 429 rate limits explicitly, returns structured `GitHubResult` object.
+- **`insightResolver.ts`**: Threads `repoHint` and `preferType` into GitHub search; returns `GitHubResult` instead of a bare URL.
+- **`AIPredictions.tsx`**: Full redesign with per-insight cards, type badges, PR number, open/closed chip, confidence bar (green/amber/red), and shimmer skeleton loaders.
+
 ## [0.4.0] - Phase 4: Third-Party APIs Integrated
+
 
 ### Added
 

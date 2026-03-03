@@ -38,6 +38,36 @@
 - **Enriched Predict Node**: Updated the `predict.ts` Express route to inject the `actualUrl` field into the JSON pipeline.
 - **UI UX**: Updated `AIPredictions.tsx` with hyperlinking logic and CSS spinner animations to respect UX latency.
 
+## Phase 5: Core Prediction Engine (Completed)
+
+- **Rich Context Signals**: Extended `ContextSnapshotPayload` (Firestore) and `ContextExtractor` (client) with `openSymbols`, `recentFiles`, `diagnostics`, and `repoHint` (derived from the Git remote URL).
+- **Scoped GitHub Search**: Rewrote `githubSearch.ts` to scope searches to the user's own repo via `repo:owner/repo` qualifier, handle 429 rate limits, and return a structured `GitHubResult` object (title, url, number, state, itemType).
+- **Smarter AI Prompt**: Rewrote `aiPrompt.ts` to include all new context signals and added a `searchQuery` field to the schema so Gemini returns an optimised query string for GitHub.
+- **Insight Resolution**: Rewrote `insightResolver.ts` to thread `repoHint` and `preferType` through, returning `GitHubResult` instead of a bare URL.
+- **Card-Based UI**: Replaced `AIPredictions.tsx` plain list with rich insight cards: type badges (🔀 PR / 🐛 Issue / 📄 Docs), PR number, open/closed chip, confidence bar (green/amber/red), reasoning text, and shimmer skeleton loaders.
+
+### Next Steps
+
+- **Phase 6 (Real-Time Streaming):**
+    - Stream Vertex AI predictions to the Webview progressively instead of waiting for all 3 to resolve.
+    - Add a Jira OAuth flow (parallel to GitHub) so Jira tickets can be resolved.
+    - Implement a server-sent events (SSE) endpoint to push new predictions automatically when the context snapshot changes significantly.
+
+## Phase 6: Proactive Pre-Fetch Engine (Completed)
+
+- **Auto-Trigger Predictions**: Created `predictionEngine.ts` — a dedicated class that watches for context changes, debounces by 5 seconds, deduplicates by file+branch hash, and fetches predictions in the background. Results are cached in memory and pushed to the Webview panel instantly when it opens.
+- **GitHub Content Pre-Fetch**: Created `githubDetails.ts` — fetches PR/Issue body (truncated to 500 chars), labels, changed files count, and comment count from the GitHub API. Integrated into `insightResolver.ts` to hydrate each `GitHubResult` after search resolution.
+- **Extension Refactor**: Refactored `extension.ts` to delegate all prediction logic to `PredictionEngine`. Predictions cache even before the panel is opened. Added `request_cached_predictions` IPC command.
+- **Expandable Preview Cards**: Rewrote `AIPredictions.tsx`: predictions auto-load on mount, button changed from "Generate Insights" to "↻ Refresh", cards expand to reveal body text/labels/metadata, "Last updated X ago" timestamp.
+
+### Next Steps
+
+- **Phase 7 (Real-Time Streaming):**
+    - Stream Vertex AI predictions to the Webview progressively.
+    - Add a Jira OAuth flow so Jira tickets can be resolved.
+    - SSE endpoint for push notifications on significant context changes.
+
+
 ## Architectural Decisions
 
 1. **Client:** React Webview (VSCode Extension API).

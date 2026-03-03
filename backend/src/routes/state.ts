@@ -19,64 +19,85 @@
 import { Router } from "express";
 import { requireAuth, AuthenticatedRequest } from "../middleware/auth";
 import {
-    saveSnapshot,
-    getLatestSnapshot,
-    ContextSnapshotPayload,
+	saveSnapshot,
+	getLatestSnapshot,
+	ContextSnapshotPayload,
 } from "../services/firestore";
 
 export const stateRoutes = Router();
 
 stateRoutes.post("/", requireAuth, async (req: AuthenticatedRequest, res) => {
-    const userId = req.userId;
-    const { timestamp, activeFile, activeBranch, workspaceRoot } = req.body;
+	const userId = req.userId;
+	const {
+		timestamp,
+		activeFile,
+		activeBranch,
+		workspaceRoot,
+		openSymbols,
+		recentFiles,
+		diagnostics,
+		repoHint,
+	} = req.body;
 
-    if (!userId) {
-        return res.status(401).json({ error: "User ID missing." });
-    }
+	if (!userId) {
+		return res.status(401).json({ error: "User ID missing." });
+	}
 
-    // Basic validation
-    if (typeof timestamp !== "number") {
-        return res
-            .status(400)
-            .json({ error: "Invalid payload structure: missing timestamp." });
-    }
+	// Basic validation
+	if (typeof timestamp !== "number") {
+		return res
+			.status(400)
+			.json({
+				error: "Invalid payload structure: missing timestamp.",
+			});
+	}
 
-    const payload: ContextSnapshotPayload = {
-        timestamp,
-        activeFile: activeFile || null,
-        activeBranch: activeBranch || null,
-        workspaceRoot: workspaceRoot || null,
-    };
+	const payload: ContextSnapshotPayload = {
+		timestamp,
+		activeFile: activeFile || null,
+		activeBranch: activeBranch || null,
+		workspaceRoot: workspaceRoot || null,
+		openSymbols: Array.isArray(openSymbols) ? openSymbols : [],
+		recentFiles: Array.isArray(recentFiles) ? recentFiles : [],
+		diagnostics: Array.isArray(diagnostics) ? diagnostics : [],
+		repoHint: repoHint || null,
+	};
 
-    try {
-        // Fire and forget (almost). In Cloud Run, we should technically await it
-        // to ensure the container isn't throttled before the promise completes.
-        await saveSnapshot(userId, payload);
+	try {
+		// Fire and forget (almost). In Cloud Run, we should technically await it
+		// to ensure the container isn't throttled before the promise completes.
+		await saveSnapshot(userId, payload);
 
-        return res
-            .status(202)
-            .json({ success: true, message: "Snapshot accepted." });
-    } catch (error) {
-        return res.status(500).json({ error: "Failed to process state." });
-    }
+		return res
+			.status(202)
+			.json({ success: true, message: "Snapshot accepted." });
+	} catch (error) {
+		return res
+			.status(500)
+			.json({ error: "Failed to process state." });
+	}
 });
 
 stateRoutes.get("/", requireAuth, async (req: AuthenticatedRequest, res) => {
-    const userId = req.userId;
+	const userId = req.userId;
 
-    if (!userId) {
-        return res.status(401).json({ error: "User ID missing." });
-    }
+	if (!userId) {
+		return res.status(401).json({ error: "User ID missing." });
+	}
 
-    try {
-        const snapshot = await getLatestSnapshot(userId);
+	try {
+		const snapshot = await getLatestSnapshot(userId);
 
-        if (!snapshot) {
-            return res.status(404).json({ error: "No snapshot found." });
-        }
+		if (!snapshot) {
+			return res
+				.status(404)
+				.json({ error: "No snapshot found." });
+		}
 
-        return res.status(200).json(snapshot);
-    } catch (error) {
-        return res.status(500).json({ error: "Failed to retrieve state." });
-    }
+		return res.status(200).json(snapshot);
+	} catch (error) {
+		return res
+			.status(500)
+			.json({ error: "Failed to retrieve state." });
+	}
 });

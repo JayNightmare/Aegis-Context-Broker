@@ -3,94 +3,128 @@
  * File: backend/src/services/insightResolver.ts
  * ============================================================================
  * * Objective:
- * Takes the array of raw Vertex AI insights (predicted PRs or Tickets) and
- * resolves them into actionable URLs by querying third-party APIs
- * (GitHub/Jira) in parallel.
+ * Takes the array of raw Vertex AI insights and resolves them into actionable
+ * GitHub results by querying the GitHub API in parallel. After finding a match,
+ * hydrates each result with the full PR/Issue content (body, labels, comments)
+ * so the Webview can render inline previews.
  * * Architectural Considerations & Sceptical Analysis:
- * - Executing search queries sequentially would destroy user experience.
- *   We MUST map over these concurrently using Promise.allSettled.
- * - Sceptical note: Rate limits. If GitHub throws a 429, we still want to
- *   return the predicted title to the developer even if the URL resolution failed.
+ * - Promise.allSettled is critical: we must never let one failing search abort
+ *   the others. Each insight resolves independently.
+ * - Two GitHub API calls per insight (search + detail fetch) = 6 calls total.
+ *   Well within the 5000 req/hour authenticated limit.
+ * - Detail fetch fails-open: if it errors, the insight still has the search
+ *   result (title, url, state) — just without body/labels preview.
  * * Core Dependencies:
  * - githubSearch
- * - jiraSearch
+ * - githubDetails
  * ============================================================================
  */
 
-import { PredictiveInsights, Insight } from "./vertexAi";
-import { resolveGithubUrl } from "./githubSearch";
-import { resolveJiraUrl } from "./jiraSearch";
+import { resolveGithubUrl, GitHubResult } from "./githubSearch";
+import { fetchGitHubDetails } from "./githubDetails";
+
+export interface Insight {
+	title: string;
+	type: string;
+	confidence: number;
+	reasoning: string;
+	searchQuery?: string;
+}
+
+export interface PredictiveInsights {
+	insights: Insight[];
+}
 
 export interface ResolvedInsight extends Insight {
-    actualUrl: string | null;
+	githubResult: GitHubResult | null;
 }
 
 export interface ResolvedPredictiveInsights {
-    insights: ResolvedInsight[];
+	insights: ResolvedInsight[];
+	repoHint: string | null;
 }
 
 export const resolveInsights = async (
-    userId: string,
-    predictions: PredictiveInsights,
+	userId: string,
+	predictions: PredictiveInsights,
+	repoHint?: string | null,
 ): Promise<ResolvedPredictiveInsights> => {
-    if (
-        !predictions ||
-        !predictions.insights ||
-        predictions.insights.length === 0
-    ) {
-        return { insights: [] };
-    }
+	if (!predictions?.insights?.length) {
+		return { insights: [], repoHint: repoHint ?? null };
+	}
 
-    const resolutionPromises = predictions.insights.map(async (insight) => {
-        let actualUrl: string | null = null;
-        const normalizedType = insight.type.toLowerCase();
+	const resolutionPromises = predictions.insights.map(
+		async (insight): Promise<ResolvedInsight> => {
+			const normalizedType = insight.type.toLowerCase();
+			const query = insight.searchQuery ?? insight.title;
+			let githubResult: GitHubResult | null = null;
 
-        try {
-            if (
-                normalizedType.includes("github") ||
-                normalizedType.includes("pr")
-            ) {
-                actualUrl = await resolveGithubUrl(userId, insight.title);
-            } else if (
-                normalizedType.includes("jira") ||
-                normalizedType.includes("ticket")
-            ) {
-                actualUrl = await resolveJiraUrl(userId, insight.title);
-            } else if (normalizedType.includes("doc")) {
-                // For internal documentation predictions, we could construct a wiki search URL
-                actualUrl = `https://internal-wiki.com/search?q=${encodeURIComponent(insight.title)}`;
-            }
-        } catch (e) {
-            console.error(
-                `[InsightResolver] Unhandled exception resolving ${insight.type} link:`,
-                e,
-            );
-            // Non-blocking catch
-        }
+			try {
+				if (
+					normalizedType.includes("github") ||
+					normalizedType.includes("pr") ||
+					normalizedType.includes("issue")
+				) {
+					const preferType =
+						normalizedType.includes("pr")
+							? "pr"
+							: normalizedType.includes(
+										"issue",
+								  )
+								? "issue"
+								: undefined;
 
-        return {
-            ...insight,
-            actualUrl,
-        };
-    });
+					githubResult = await resolveGithubUrl(
+						userId,
+						query,
+						repoHint,
+						preferType,
+					);
 
-    const results = await Promise.allSettled(resolutionPromises);
+					// Hydrate with full content if search found a match
+					if (githubResult) {
+						const details =
+							await fetchGitHubDetails(
+								userId,
+								githubResult.url,
+								githubResult.itemType,
+							);
+						if (details) {
+							githubResult = {
+								...githubResult,
+								body: details.body,
+								labels: details.labels,
+								changedFilesCount:
+									details.changedFilesCount,
+								commentCount:
+									details.commentCount,
+							};
+						}
+					}
+				}
+			} catch (e) {
+				console.error(
+					`[InsightResolver] Exception resolving ${insight.type}:`,
+					e,
+				);
+			}
 
-    const insights: ResolvedInsight[] = results.map((result, index) => {
-        if (result.status === "fulfilled") {
-            return result.value;
-        } else {
-            console.warn(
-                `[InsightResolver] Failed promise for insight resolution.`,
-                result.reason,
-            );
-            // If the promise completely rejects, preserve the raw prediction
-            return {
-                ...predictions.insights[index],
-                actualUrl: null,
-            };
-        }
-    });
+			return { ...insight, githubResult };
+		},
+	);
 
-    return { insights };
+	const results = await Promise.allSettled(resolutionPromises);
+
+	const insights: ResolvedInsight[] = results.map((result, index) => {
+		if (result.status === "fulfilled") {
+			return result.value;
+		}
+		console.warn(
+			`[InsightResolver] Failed to resolve insight at index ${index}:`,
+			result.reason,
+		);
+		return { ...predictions.insights[index], githubResult: null };
+	});
+
+	return { insights, repoHint: repoHint ?? null };
 };

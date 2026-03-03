@@ -1,80 +1,101 @@
+/**
+ * ============================================================================
+ * Test: insightResolver.test.ts
+ * ============================================================================
+ * Updated to match the new ResolvedInsight shape (githubResult object instead
+ * of actualUrl string) and the new resolveInsights signature (accepts repoHint).
+ * Jira tests are removed since Jira resolution is a stub in the current phase.
+ * ============================================================================
+ */
+
 import { resolveInsights } from "../services/insightResolver";
 import { resolveGithubUrl } from "../services/githubSearch";
-import { resolveJiraUrl } from "../services/jiraSearch";
-import { PredictiveInsights } from "../services/vertexAi";
+import { GitHubResult } from "../services/githubSearch";
 
-// Mock the dependencies
 jest.mock("../services/githubSearch", () => ({
-    resolveGithubUrl: jest.fn(),
+	resolveGithubUrl: jest.fn(),
 }));
 
-jest.mock("../services/jiraSearch", () => ({
-    resolveJiraUrl: jest.fn(),
-}));
+const mockGhResult: GitHubResult = {
+	title: "Update Auth middleware",
+	url: "https://github.com/owner/repo/pull/1",
+	number: 1,
+	state: "open",
+	itemType: "pr",
+	body: "This PR updates the auth middleware",
+	labels: ["enhancement"],
+	changedFilesCount: 3,
+	commentCount: 2,
+};
 
 describe("insightResolver Service", () => {
-    beforeEach(() => {
-        jest.clearAllMocks();
-    });
+	beforeEach(() => {
+		jest.clearAllMocks();
+	});
 
-    it("should correctly map GitHub and Jira links concurrently", async () => {
-        const mockPredictions: PredictiveInsights = {
-            insights: [
-                {
-                    title: "Update Auth",
-                    type: "GitHub PR",
-                    confidence: 0.9,
-                    reasoning: "Related to changes",
-                },
-                {
-                    title: "AEGIS-123",
-                    type: "Jira Ticket",
-                    confidence: 0.8,
-                    reasoning: "Main epic",
-                },
-            ],
-        };
+	it("should resolve a GitHub PR insight into a GitHubResult", async () => {
+		const mockPredictions = {
+			insights: [
+				{
+					title: "Update Auth",
+					type: "GitHub PR",
+					confidence: 0.9,
+					reasoning: "Related to auth changes",
+					searchQuery: "Update Auth middleware",
+				},
+			],
+		};
 
-        (resolveGithubUrl as jest.Mock).mockResolvedValue(
-            "https://github.com/PR/1",
-        );
-        (resolveJiraUrl as jest.Mock).mockResolvedValue(
-            "https://jira.com/AEGIS-123",
-        );
+		(resolveGithubUrl as jest.Mock).mockResolvedValue(mockGhResult);
 
-        const result = await resolveInsights("user-1", mockPredictions);
+		const result = await resolveInsights(
+			"user-1",
+			mockPredictions,
+			"owner/repo",
+		);
 
-        expect(result.insights.length).toBe(2);
+		expect(result.insights.length).toBe(1);
+		expect(result.insights[0].githubResult?.url).toBe(
+			"https://github.com/owner/repo/pull/1",
+		);
+		expect(result.insights[0].githubResult?.number).toBe(1);
+		expect(result.insights[0].githubResult?.state).toBe("open");
+		expect(result.repoHint).toBe("owner/repo");
+		expect(resolveGithubUrl).toHaveBeenCalledWith(
+			"user-1",
+			"Update Auth middleware",
+			"owner/repo",
+			"pr",
+		);
+	});
 
-        // Ensure GitHub was resolved
-        expect(result.insights[0].actualUrl).toBe("https://github.com/PR/1");
-        expect(resolveGithubUrl).toHaveBeenCalledWith("user-1", "Update Auth");
+	it("should gracefully handle a GitHub API failure and return null githubResult", async () => {
+		const mockPredictions = {
+			insights: [
+				{
+					title: "Busted PR",
+					type: "GitHub PR",
+					confidence: 0.9,
+					reasoning: "Will fail",
+				},
+			],
+		};
 
-        // Ensure Jira was resolved
-        expect(result.insights[1].actualUrl).toBe("https://jira.com/AEGIS-123");
-        expect(resolveJiraUrl).toHaveBeenCalledWith("user-1", "AEGIS-123");
-    });
+		(resolveGithubUrl as jest.Mock).mockRejectedValue(
+			new Error("API Rate Limit"),
+		);
 
-    it("should gracefully handle a mock third-party failure by returning null actualUrl", async () => {
-        const mockPredictions: PredictiveInsights = {
-            insights: [
-                {
-                    title: "Busted PR",
-                    type: "GitHub PR",
-                    confidence: 0.9,
-                    reasoning: "Will fail",
-                },
-            ],
-        };
+		const result = await resolveInsights("user-1", mockPredictions);
 
-        (resolveGithubUrl as jest.Mock).mockRejectedValue(
-            new Error("API Rate Limit"),
-        );
+		expect(result.insights.length).toBe(1);
+		expect(result.insights[0].githubResult).toBeNull();
+		expect(result.insights[0].title).toBe("Busted PR");
+	});
 
-        const result = await resolveInsights("user-1", mockPredictions);
-
-        expect(result.insights.length).toBe(1);
-        expect(result.insights[0].actualUrl).toBeNull();
-        expect(result.insights[0].title).toBe("Busted PR"); // Still retained original data
-    });
+	it("should return empty insights for an empty prediction set", async () => {
+		const result = await resolveInsights("user-1", {
+			insights: [],
+		});
+		expect(result.insights).toHaveLength(0);
+	});
 });

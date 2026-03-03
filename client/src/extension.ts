@@ -3,41 +3,46 @@
  * File: src/extension.ts
  * ============================================================================
  * * Objective:
- * Entry point for the Aegis Context Broker VSCode extension. Registers commands
- * and manages the lifecycle of the React Webview panel.
+ * Entry point for the Aegis Context Broker VSCode extension. Registers
+ * commands, manages the Webview panel, and wires the PredictionEngine to
+ * auto-trigger predictions when the developer's context changes.
  * * Architectural Considerations & Sceptical Analysis:
- * - Extension activation should be absolutely minimal to avoid adding to
- *   IDE startup latency.
- * - The webview panel must be properly disposed of to prevent memory leaks.
- * - Sceptical note: Large React bundles in the webview will slow down initial
- *   rendering. The webview must be heavily optimized and chunked.
+ * - Extension activation must be minimal to avoid IDE startup latency.
+ * - The PredictionEngine runs independently of the Webview panel — it starts
+ *   caching predictions as soon as the extension activates, not when the
+ *   panel opens. This means results are ready instantly.
+ * - Sceptical note: All backend URLs are hardcoded to localhost:8081 for
+ *   local dev. In production these should come from extension settings.
  * * Core Dependencies:
  * - vscode API
+ * - PredictionEngine
+ * - ContextExtractor
  * ============================================================================
  */
 
 import * as vscode from "vscode";
 import { ContextExtractor, ContextSnapshot } from "./contextExtractor";
 import { LocalStateCache } from "./cache";
+import { PredictionEngine } from "./predictionEngine";
 import fetch from "node-fetch";
 
-export function activate(context: vscode.ExtensionContext) {
-	// console.log("Aegis Context Broker is now active.");
+const BACKEND_URL = "http://localhost:8081";
 
+export function activate(context: vscode.ExtensionContext) {
 	const contextExtractor = new ContextExtractor(context);
 	const localCache = new LocalStateCache(context.secrets);
+	const predictionEngine = new PredictionEngine();
 
 	const disposable = vscode.commands.registerCommand(
 		"aegis.openVault",
 		() => {
-			// Create and show a new webview
 			const panel = vscode.window.createWebviewPanel(
 				"aegisVault",
 				"Aegis Context Vault",
 				vscode.ViewColumn.One,
 				{
-					enableScripts: true, // Needed for React
-					retainContextWhenHidden: true, // Prevents React unmount on tab switch
+					enableScripts: true,
+					retainContextWhenHidden: true,
 					localResourceRoots: [
 						vscode.Uri.joinPath(
 							context.extensionUri,
@@ -48,13 +53,17 @@ export function activate(context: vscode.ExtensionContext) {
 				},
 			);
 
-			// Load the built React application HTML here
 			panel.webview.html = getWebviewContent(
 				panel.webview,
 				context.extensionUri,
 			);
 
-			// Handle messages from the webview
+			predictionEngine.setPanel(panel);
+
+			panel.onDidDispose(() => {
+				predictionEngine.setPanel(null);
+			});
+
 			panel.webview.onDidReceiveMessage(
 				(message) => {
 					switch (message.command) {
@@ -63,17 +72,14 @@ export function activate(context: vscode.ExtensionContext) {
 								message.text,
 							);
 							return;
+
 						case "initiate_github_oauth": {
-							// Launch the user's default browser to authenticate
 							const clientId =
-								"Ov23ligUd402nRnKRYf0"; // Must match the GitHub OAuth App registered in backend/.env
-							const redirectUri =
-								"http://localhost:8081/api/integrations/github/callback";
+								"Ov23ligUd402nRnKRYf0";
+							const redirectUri = `${BACKEND_URL}/api/integrations/github/callback`;
 							const scope =
 								"repo read:user";
-							const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(
-								redirectUri,
-							)}&scope=${encodeURIComponent(scope)}`;
+							const authUrl = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}`;
 
 							vscode.env.openExternal(
 								vscode.Uri.parse(
@@ -81,7 +87,6 @@ export function activate(context: vscode.ExtensionContext) {
 								),
 							);
 
-							// Start polling the backend to see when the OAuth flow finishes
 							let attempts = 0;
 							const pollInterval =
 								setInterval(
@@ -91,7 +96,6 @@ export function activate(context: vscode.ExtensionContext) {
 											attempts >
 											30
 										) {
-											// Timeout after 1.5 minutes (30 * 3s)
 											clearInterval(
 												pollInterval,
 											);
@@ -105,7 +109,7 @@ export function activate(context: vscode.ExtensionContext) {
 										}
 
 										fetch(
-											"http://localhost:8081/api/integrations/github/status",
+											`${BACKEND_URL}/api/integrations/github/status`,
 											{
 												headers: {
 													Authorization:
@@ -121,7 +125,7 @@ export function activate(context: vscode.ExtensionContext) {
 											)
 											.then(
 												(
-													data,
+													data: any,
 												) => {
 													if (
 														data.connected
@@ -140,79 +144,51 @@ export function activate(context: vscode.ExtensionContext) {
 											.catch(
 												(
 													e,
-												) => {
+												) =>
 													console.error(
 														"Error polling github status:",
 														e,
-													);
-												},
+													),
 											);
 									},
 									3000,
-								); // Check every 3 seconds
+								);
 
 							return;
 						}
+
 						case "request_initial_state":
-							// If webview asks for initial state, trigger evaluation forcefully
 							(
 								contextExtractor as any
 							)[
 								"triggerEvaluation"
 							]();
 							return;
+
 						case "request_predictions":
-							// Fetch predictions from the backend (auth token mocked for now)
-							fetch(
-								"http://localhost:8081/api/predict",
-								{
-									headers: {
-										Authorization:
-											"Bearer mock-valid-token",
-									},
-								},
-							)
-								.then((res) => {
-									if (
-										!res.ok
-									)
-										throw new Error(
-											`Backend Error: ${res.statusText}`,
-										);
-									return res.json();
-								})
-								.then(
-									(
-										data,
-									) => {
-										panel.webview.postMessage(
-											{
-												command: "receive_predictions",
-												payload: data,
-											},
-										);
-									},
-								)
-								.catch(
-									(
-										err,
-									) => {
-										panel.webview.postMessage(
-											{
-												command: "receive_predictions",
-												error: err.message,
-											},
-										);
+							predictionEngine.forceRefresh();
+							return;
+
+						case "request_cached_predictions": {
+							const cached =
+								predictionEngine.getCachedPredictions();
+							if (cached) {
+								panel.webview.postMessage(
+									{
+										command: "receive_predictions",
+										payload: cached.payload,
+										cachedAt: cached.cachedAt,
 									},
 								);
+							}
 							return;
+						}
 					}
 				},
 				undefined,
 				context.subscriptions,
 			);
 
-			// Pipe extracted context to the Webview and Backend
 			contextExtractor.onSnapshotUpdate(
 				async (snapshot: ContextSnapshot) => {
 					console.log(
@@ -220,53 +196,47 @@ export function activate(context: vscode.ExtensionContext) {
 						snapshot,
 					);
 
-					// Sync to local cache
 					await localCache.set(snapshot);
 
-					// Send to Webview UI
 					panel.webview.postMessage({
 						command: "update_context",
 						payload: snapshot,
 					});
 
-					// Push to Backend API
-					try {
-						// Sceptical note: fire-and-forget to avoid blocking the extractor
-						fetch(
-							"http://localhost:8081/api/state",
-							{
-								method: "POST",
-								headers: {
-									"Content-Type":
-										"application/json",
-									Authorization:
-										"Bearer mock-valid-token",
-								},
-								body: JSON.stringify(
-									snapshot,
-								),
-							},
-						).catch((e) =>
-							console.error(
-								"[State Push Error]",
-								e,
-							),
-						);
-					} catch (e) {
-						console.error(
-							"Failed to push state home.",
-							e,
-						);
-					}
+					pushStateToBackend(snapshot);
+					predictionEngine.onContextChange(
+						snapshot,
+					);
 				},
 			);
 		},
 	);
 
+	// Also wire the prediction engine to context changes OUTSIDE the panel
+	// so predictions cache even before the panel is opened.
+	contextExtractor.onSnapshotUpdate(async (snapshot: ContextSnapshot) => {
+		pushStateToBackend(snapshot);
+		predictionEngine.onContextChange(snapshot);
+	});
+
 	context.subscriptions.push(disposable);
 	context.subscriptions.push({
 		dispose: () => contextExtractor.dispose(),
 	});
+	context.subscriptions.push({
+		dispose: () => predictionEngine.dispose(),
+	});
+}
+
+function pushStateToBackend(snapshot: ContextSnapshot): void {
+	fetch(`${BACKEND_URL}/api/state`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: "Bearer mock-valid-token",
+		},
+		body: JSON.stringify(snapshot),
+	}).catch((e) => console.error("[State Push Error]", e));
 }
 
 function getWebviewContent(webview: vscode.Webview, extensionUri: vscode.Uri) {

@@ -3,18 +3,20 @@
  * File: backend/src/routes/predict.ts
  * ============================================================================
  * * Objective:
- * Exposes the /api/predict endpoint for the IDE Webview to request contextual
- * AI predictions based on their current active file and branch.
+ * Exposes the /api/predict endpoint. Takes the latest Firestore context
+ * snapshot, builds an enriched AI prompt, calls Vertex AI, then resolves
+ * returned insights into real GitHub results scoped to the user's repository.
  * * Architectural Considerations & Sceptical Analysis:
- * - This endpoint performs an expensive RPC to Google Cloud Vertex AI. We must
- *   ensure the caller is authenticated to prevent abuse.
- * - Sceptical note: Error boundaries must be strictly handled. If Vertex fails,
- *   return a clean 503 Service Unavailable so the Webview UI doesn't crash
- *   parsing a weird HTML stack trace.
+ * - This endpoint chains three external calls (Firestore → Vertex → GitHub).
+ *   If Vertex fails, we return 503 immediately — GitHub resolution is skipped.
+ * - Sceptical note: Error boundaries must be strict. If Vertex returns invalid
+ *   JSON the parser will throw — caught and returned as 503, not a 500 crash.
  * * Core Dependencies:
  * - express
  * - firestore (getLatestSnapshot)
- * - vertexAi / aiPrompt
+ * - aiPrompt (buildContextPrompt)
+ * - vertexAi (generatePredictiveInsights)
+ * - insightResolver (resolveInsights)
  * ============================================================================
  */
 
@@ -28,46 +30,45 @@ import { resolveInsights } from "../services/insightResolver";
 export const predictRoutes = Router();
 
 predictRoutes.get("/", requireAuth, async (req: AuthenticatedRequest, res) => {
-    const userId = req.userId;
+	const userId = req.userId;
 
-    if (!userId) {
-        return res.status(401).json({ error: "User ID missing." });
-    }
+	if (!userId) {
+		return res.status(401).json({ error: "User ID missing." });
+	}
 
-    try {
-        // 1. Fetch the latest secure context snapshot for this user
-        const snapshot = await getLatestSnapshot(userId);
+	try {
+		const snapshot = await getLatestSnapshot(userId);
 
-        if (!snapshot) {
-            return res.status(404).json({
-                error: "No active context snapshot found for this user.",
-            });
-        }
+		if (!snapshot) {
+			return res.status(404).json({
+				error: "No active context snapshot found for this user.",
+			});
+		}
 
-        // 2. Build the deterministic prompt
-        const prompt = buildContextPrompt(snapshot);
+		const prompt = buildContextPrompt(snapshot);
 
-        // 3. Request inference from Gemini
-        console.log(
-            `[VertexAI] Requesting prediction for User: ${userId} | File: ${snapshot.activeFile}`,
-        );
-        const predictiveInsights = await generatePredictiveInsights(prompt);
+		console.log(
+			`[VertexAI] Requesting prediction for User: ${userId} | File: ${snapshot.activeFile} | Repo: ${snapshot.repoHint ?? "unknown"}`,
+		);
+		const predictiveInsights =
+			await generatePredictiveInsights(prompt);
 
-        // 4. Resolve the external links (GitHub/Jira) concurrently
-        const resolvedInsights = await resolveInsights(
-            userId,
-            predictiveInsights,
-        );
+		const resolvedInsights = await resolveInsights(
+			userId,
+			predictiveInsights,
+			snapshot.repoHint,
+		);
 
-        // 5. Return to the client Webview
-        return res.status(200).json(resolvedInsights);
-    } catch (error: any) {
-        console.error(
-            `[Predict API] Error generating insights:`,
-            error.message,
-        );
-        return res
-            .status(503)
-            .json({ error: "AI prediction service temporarily unavailable." });
-    }
+		return res.status(200).json(resolvedInsights);
+	} catch (error: any) {
+		console.error(
+			`[Predict API] Error generating insights:`,
+			error.message,
+		);
+		return res
+			.status(503)
+			.json({
+				error: "AI prediction service temporarily unavailable.",
+			});
+	}
 });
